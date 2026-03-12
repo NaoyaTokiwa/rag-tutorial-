@@ -58,69 +58,78 @@ streamlit run app.py
 
 ```python
 import streamlit as st     # Web UI（チャット画面）
-from openai import OpenAI  # OpenAI API（ベクトル+回答）
-import chromadb           # ベクトルDB（高速検索）
-from pypdf import PdfReader # PDF→テキスト
+import chromadb            # ベクトルデータベース（高速類似検索）
+from openai import OpenAI  # OpenAI API（ベクトル化 + 回答生成）
+from pypdf import PdfReader # PDF → テキスト変換
 ```
 
 2. RAG 6ステップ実装
 ① PDF→テキスト
 ```python
 def pdf_to_text(file_bytes):
-    reader = PdfReader(io.BytesIO(file_bytes))
-    return "\n".join([page.extract_text() for page in reader.pages])
+    reader = PdfReader(io.BytesIO(file_bytes))  # PDF をメモリ上で読み込み
+    texts = [page.extract_text() for page in reader.pages]  # 全ページ抽出
+    return "\n".join(texts)
 ```
 
-② テキスト→チャンク
+② テキスト → チャンク（800文字分割）
 ```python
 def split_text(text, chunk_size=800, overlap=200):
-    return [text[i:i+chunk_size] for i in range(0, len(text), chunk_size-overlap)]
-
+    # 長い文章を小分け（検索精度向上 + LLM トークン節約）
+    chunks = []
+    for i in range(0, len(text), chunk_size - overlap):
+        chunks.append(text[i:i+chunk_size])
+    return chunks
 ```
 
-③ チャンク→ベクトル
+③ チャンク → ベクトル（OpenAI embeddings）
 ```python
 def embed_texts(texts):
     resp = client.embeddings.create(model="text-embedding-3-small", input=texts)
-    return [d.embedding for d in resp.data]  # 文章→1536次元ベクトル
+    return [d.embedding for d in resp.data]  # 各文章 → 1536次元ベクトル
 ```
 
-④ DB保存
+④ ChromaDB 保存
 ```python
-collection.add(ids=..., documents=chunks, embeddings=...)
+collection.add(ids=..., documents=chunks, embeddings=..., metadatas=...)
+# 「文章 + ベクトル」を DB に格納 → 高速検索可能に！
 ```
 
-⑤ 質問→類似検索
+⑤ 質問 → 類似チャンク検索
 ```python
 def retrieve_relevant_chunks(query, k=4):
-    q_emb = embed_texts([query])
-    return collection.query(query_embeddings=[q_emb], n_results=4)["documents"]
+    q_emb = embed_texts([query])  # 質問をベクトル化
+    results = collection.query(query_embeddings=[q_emb], n_results=4)
+    return results["documents"]  # 上位4件の関連文章を返す
 ```
 
-⑥ LLM回答生成
+⑥ LLMで回答生成
 ```python
-def generate_answer(query, chunks):
-    context = "\n\n".join(chunks)
-    resp = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": f"コンテキスト:\n{context}\n質問:{query}"}]
-    )
+def generate_answer(query, context_chunks):
+    prompt = f"コンテキスト: {'\n'.join(context_chunks)}\n質問: {query}"
+    resp = client.chat.completions.create(model="gpt-4o-mini", messages=[...])
     return resp.choices.message.content
 ```
 
-3. Streamlit UI
-```python
-サイドバー: PDFアップロード + インデックスボタン
-メイン: st.chat_input + st.chat_message（チャットUI）
-st.session_state: DB/履歴保持
+3. Streamlit UI 構成
+```
+左サイドバー: PDFアップロード + インデックス作成ボタン
+メイン: RAGチャット（st.chat_input + st.chat_message）
+セッション状態: コレクション + チャット履歴を保持
 ```
 
-## 🔧 カスタマイズ例
+## 重要ポイント:
+•	 st.session_state : ページ更新してもデータ保持
+•	 st.spinner : 処理中ローディング表示
+•	 disabled=not uploaded_files : 条件分岐ボタン制御
+
+## 🔧 拡張アイデア
 ```
-・複数PDF: 実装済み
-・要約モード: prompt変更
-・ソース引用: metadata活用
-・LangChain: フレームワーク化
+✅ 複数PDF対応（実装済）
+✅ 要約モード追加
+✅ ソース引用表示（metadata活用）
+✅ FastAPI 分離（本格Web化）
+✅ LangChain 導入（RAGフレームワーク）
 ```
 
 ## ⚠️ 注意事項
@@ -130,8 +139,8 @@ st.session_state: DB/履歴保持
 ✅ 小容量PDF推奨（コスト節約）
 ```
 ## 📚 参考資料
-•	Streamlit
-•	ChromaDB
-•	OpenAI API
+* [Streamlit 公式](https://streamlit.io/)
+* [ChromaDB 公式](https://docs.trychroma.com/docs/overview/introduction)
+
 ```
 
